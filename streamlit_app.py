@@ -2,16 +2,18 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-import plotly.graph_objects as go
-from datetime import datetime
 import matplotlib.pyplot as plt
 
 st.set_page_config(
-    page_title="Portfolio Management Tool",
+    page_title="Stock Analysis Dashboard",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Alpha Vantage API Key
+API_KEY = "ALH36ZVG26EVQNYP"
+BASE_URL = "https://www.alphavantage.co/query"
 
 # Styling for headers and sections
 st.markdown("""
@@ -26,44 +28,35 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Alpha Vantage API Key (Replace with your key)
-API_KEY = "YOUR_ALPHA_VANTAGE_API_KEY"
-BASE_URL = "https://www.alphavantage.co/query"
-
 # Sidebar Inputs
 with st.sidebar:
-    st.title("📊 Portfolio Management Tool")
-    st.write("Enter your stock portfolio details below:")
+    st.title("📊 Stock Analysis Dashboard")
+    ticker = st.text_input("Stock Ticker (e.g., AAPL, MSFT):", value="AAPL")
+    analysis_type = st.selectbox("Select Analysis Type:", ["Overview", "Technical Analysis", "Financial Analysis"])
+    indicator = None
+    if analysis_type == "Technical Analysis":
+        indicator = st.selectbox("Select Technical Indicator:", ["None", "SMA", "EMA", "MACD", "RSI", "Bollinger Bands"])
 
-    tickers = st.text_input("Stock Tickers (comma-separated):", value="AAPL,MSFT,GOOGL")
-    investment_amount = st.number_input("Total Investment Amount ($):", value=10000.0, step=100.0)
-    weighting_strategy = st.selectbox("Weighting Strategy:", ["Equal Weight", "Custom"])
+# Title
+st.title("📈 Stock Analysis Dashboard")
 
-    # Custom weights input if selected
-    weights = []
-    if weighting_strategy == "Custom":
-        st.write("Enter weights for each stock (total = 100%):")
-        for ticker in tickers.split(","):
-            weight = st.number_input(f"{ticker.strip()} weight (%):", min_value=0.0, max_value=100.0, step=0.1)
-            weights.append(weight)
-        if sum(weights) != 100:
-            st.warning("Weights must sum up to 100%.")
-
-# Function to fetch stock data
-@st.cache
-def fetch_stock_data(symbol):
-    """Fetch historical stock data from Alpha Vantage."""
+# Fetch Stock Data
+@st.cache_data
+def fetch_stock_data(ticker):
+    """Fetch historical stock data using Alpha Vantage."""
     try:
         response = requests.get(
             BASE_URL,
             params={
                 "function": "TIME_SERIES_DAILY_ADJUSTED",
-                "symbol": symbol,
+                "symbol": ticker,
                 "apikey": API_KEY,
-                "outputsize": "full"
+                "outputsize": "compact"
             }
         )
         data = response.json()
+        # Log the full API response for debugging
+        st.write("API Response:", data)
         if "Time Series (Daily)" in data:
             df = pd.DataFrame.from_dict(data["Time Series (Daily)"], orient="index")
             df = df.rename(columns={
@@ -75,81 +68,120 @@ def fetch_stock_data(symbol):
                 "6. volume": "Volume"
             })
             df.index = pd.to_datetime(df.index)
+            df = df.astype(float)
             return df.sort_index(), None
+        elif "Note" in data:
+            return None, data["Note"]
+        elif "Error Message" in data:
+            return None, data["Error Message"]
         else:
-            return None, data.get('Note', 'Unknown error')
+            return None, "Unknown error occurred while fetching data."
+    except Exception as e:
+        return None, str(e)
+
+# Fetch Company Overview
+@st.cache_data
+def fetch_company_overview(ticker):
+    """Fetch company overview using Alpha Vantage."""
+    try:
+        response = requests.get(
+            BASE_URL,
+            params={
+                "function": "OVERVIEW",
+                "symbol": ticker,
+                "apikey": API_KEY
+            }
+        )
+        data = response.json()
+        if "Symbol" in data:
+            return data, None
+        elif "Note" in data:
+            return None, data["Note"]
+        elif "Error Message" in data:
+            return None, data["Error Message"]
+        else:
+            return None, "Unknown error occurred while fetching company overview."
     except Exception as e:
         return None, str(e)
 
 # Calculate Technical Indicators
-def calculate_indicators(df):
-    """Calculate RSI, MACD, and Bollinger Bands."""
-    df = df.copy()
-    df["Close"] = pd.to_numeric(df["Close"])
-
-    # RSI Calculation
-    delta = df["Close"].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df["RSI"] = 100 - (100 / (1 + rs))
-
-    # MACD Calculation
-    ema_12 = df["Close"].ewm(span=12, adjust=False).mean()
-    ema_26 = df["Close"].ewm(span=26, adjust=False).mean()
-    df["MACD"] = ema_12 - ema_26
-    df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
-
-    # Bollinger Bands
-    rolling_mean = df["Close"].rolling(window=20).mean()
-    rolling_std = df["Close"].rolling(window=20).std()
-    df["Upper Band"] = rolling_mean + (rolling_std * 2)
-    df["Lower Band"] = rolling_mean - (rolling_std * 2)
-
+def calculate_sma(df, window=20):
+    """Calculate Simple Moving Average (SMA)."""
+    df["SMA"] = df["Close"].rolling(window=window).mean()
     return df
 
-# Fetch and analyze data for each ticker
-portfolio_data = {}
-for ticker in tickers.split(","):
-    ticker = ticker.strip().upper()
-    st.markdown(f'<div class="section-header">{ticker} Analysis</div>', unsafe_allow_html=True)
+def calculate_ema(df, window=20):
+    """Calculate Exponential Moving Average (EMA)."""
+    df["EMA"] = df["Close"].ewm(span=window, adjust=False).mean()
+    return df
 
-    # Fetch data
-    data, error = fetch_stock_data(ticker)
+def calculate_macd(df):
+    """Calculate MACD and Signal Line."""
+    df["MACD"] = df["Close"].ewm(span=12, adjust=False).mean() - df["Close"].ewm(span=26, adjust=False).mean()
+    df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+    return df
+
+def calculate_rsi(df, window=14):
+    """Calculate Relative Strength Index (RSI)."""
+    delta = df["Close"].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=window).mean()
+    avg_loss = loss.rolling(window=window).mean()
+    rs = avg_gain / avg_loss
+    df["RSI"] = 100 - (100 / (1 + rs))
+    return df
+
+def calculate_bollinger_bands(df, window=20):
+    """Calculate Bollinger Bands."""
+    df["Middle"] = df["Close"].rolling(window=window).mean()
+    df["Upper"] = df["Middle"] + 2 * df["Close"].rolling(window=window).std()
+    df["Lower"] = df["Middle"] - 2 * df["Close"].rolling(window=window).std()
+    return df
+
+# Overview Section
+if analysis_type == "Overview":
+    st.header("Company Overview")
+    company_data, error = fetch_company_overview(ticker)
     if error:
-        st.error(f"Error fetching data for {ticker}: {error}")
-    elif data is not None:
-        portfolio_data[ticker] = calculate_indicators(data)
+        st.error(f"Error fetching company overview: {error}")
+    else:
+        st.subheader(company_data.get("Name", ticker))
+        st.write(company_data.get("Description", "No company description available."))
+        st.write(f"**Industry:** {company_data.get('Industry', 'N/A')}")
+        st.write(f"**Market Cap:** ${company_data.get('MarketCapitalization', 'N/A')}")
+        st.write(f"**Dividend Yield:** {company_data.get('DividendYield', 'N/A')}")
+        st.write(f"**Headquarters:** {company_data.get('Address', 'N/A')}")
 
-        # Plot Closing Prices
-        st.subheader("Closing Price and Technical Indicators")
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(data.index, data["Close"], label="Closing Price", color="blue")
-        ax.plot(data.index, data["Upper Band"], label="Upper Bollinger Band", linestyle="--", color="green")
-        ax.plot(data.index, data["Lower Band"], label="Lower Bollinger Band", linestyle="--", color="red")
-        ax.set_title(f"{ticker} Price and Bollinger Bands")
-        ax.legend()
-        st.pyplot(fig)
+# Technical Analysis Section
+if analysis_type == "Technical Analysis":
+    st.header("Technical Analysis")
+    stock_data, error = fetch_stock_data(ticker)
+    if error:
+        st.error(f"Error fetching stock data: {error}")
+        if "Note" in error:
+            st.warning("You may have hit the API request limit. Try again later.")
+        elif "Error Message" in error:
+            st.warning("Invalid ticker or unsupported stock symbol.")
+    elif stock_data is not None:
+        st.line_chart(stock_data["Close"])
+        if indicator == "SMA":
+            stock_data = calculate_sma(stock_data)
+            st.line_chart(stock_data[["Close", "SMA"]])
+        elif indicator == "EMA":
+            stock_data = calculate_ema(stock_data)
+            st.line_chart(stock_data[["Close", "EMA"]])
+        elif indicator == "MACD":
+            stock_data = calculate_macd(stock_data)
+            st.line_chart(stock_data[["MACD", "Signal"]])
+        elif indicator == "RSI":
+            stock_data = calculate_rsi(stock_data)
+            st.line_chart(stock_data[["RSI"]])
+        elif indicator == "Bollinger Bands":
+            stock_data = calculate_bollinger_bands(stock_data)
+            st.line_chart(stock_data[["Close", "Upper", "Middle", "Lower"]])
 
-        # RSI and MACD
-        st.subheader("RSI and MACD")
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=data.index, y=data["RSI"], name="RSI", line=dict(color="orange")))
-        fig.add_trace(go.Scatter(x=data.index, y=data["MACD"], name="MACD", line=dict(color="blue")))
-        fig.add_trace(go.Scatter(x=data.index, y=data["Signal"], name="Signal Line", line=dict(color="red")))
-        fig.update_layout(title=f"{ticker} RSI and MACD", xaxis_title="Date", yaxis_title="Value")
-        st.plotly_chart(fig)
-
-# Portfolio Allocation Visualization
-if weighting_strategy == "Equal Weight":
-    weights = [100 / len(tickers.split(","))] * len(tickers.split(","))
-allocations = [investment_amount * (weight / 100) for weight in weights]
-
-st.markdown('<div class="section-header">Portfolio Allocation</div>', unsafe_allow_html=True)
-fig = go.Figure(data=[go.Pie(labels=tickers.split(","), values=allocations)])
-fig.update_layout(title="Portfolio Allocation by Investment")
-st.plotly_chart(fig)
-
-st.markdown('<div class="section-header">Summary</div>', unsafe_allow_html=True)
-for ticker, weight, allocation in zip(tickers.split(","), weights, allocations):
-    st.write(f"**{ticker.strip().upper()}**: {weight:.2f}% -> ${allocation:,.2f}")
+# Financial Analysis Section
+if analysis_type == "Financial Analysis":
+    st.header("Financial Analysis")
+    st.write("**Financial metrics and insights coming soon!**")
