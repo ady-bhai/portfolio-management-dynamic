@@ -27,7 +27,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Alpha Vantage API Key (Replace with your key)
-API_KEY = "ALH36ZVG26EVQNYP"
+API_KEY = "YOUR_ALPHA_VANTAGE_API_KEY"
 BASE_URL = "https://www.alphavantage.co/query"
 
 # Sidebar Inputs
@@ -75,13 +75,11 @@ def fetch_stock_data(symbol):
                 "6. volume": "Volume"
             })
             df.index = pd.to_datetime(df.index)
-            return df.sort_index()
+            return df.sort_index(), None
         else:
-            st.error(f"Error fetching data for {symbol}: {data.get('Note', 'Unknown error')}")
-            return None
+            return None, data.get('Note', 'Unknown error')
     except Exception as e:
-        st.error(f"Error fetching data for {symbol}: {e}")
-        return None
+        return None, str(e)
 
 # Calculate Technical Indicators
 def calculate_indicators(df):
@@ -116,8 +114,11 @@ for ticker in tickers.split(","):
     ticker = ticker.strip().upper()
     st.markdown(f'<div class="section-header">{ticker} Analysis</div>', unsafe_allow_html=True)
 
-    data = fetch_stock_data(ticker)
-    if data is not None:
+    # Fetch data
+    data, error = fetch_stock_data(ticker)
+    if error:
+        st.error(f"Error fetching data for {ticker}: {error}")
+    elif data is not None:
         portfolio_data[ticker] = calculate_indicators(data)
 
         # Plot Closing Prices
